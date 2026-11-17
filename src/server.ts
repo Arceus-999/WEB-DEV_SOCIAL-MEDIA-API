@@ -3,6 +3,7 @@ import http from "http";
 import cors from "cors";
 import dotenv from "dotenv";
 import { initSocketIO } from "./services/notification.service";
+import authRoutes from "./routes/auth.routes";
 import userRoutes from "./routes/user.routes";
 import postRoutes from "./routes/post.routes";
 import commentRoutes from "./routes/comment.routes";
@@ -23,6 +24,7 @@ app.get("/health", (_req, res) => {
   res.json({ success: true, status: "OK", modules: ["users", "posts", "comments", "notifications", "admin"] });
 });
 
+app.use("/auth", authRoutes);
 app.use("/users", userRoutes);
 app.use("/posts", postRoutes);
 app.use("/comments", commentRoutes);
