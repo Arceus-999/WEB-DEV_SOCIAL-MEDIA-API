@@ -1,9 +1,41 @@
 import { Router, Response } from "express";
 import prisma from "../utils/prisma";
 import { authenticateJWT, AuthRequest } from "../middleware/auth.middleware";
-import { notifyFollow } from "../services/notification.service";
+import { createAndEmitNotification } from "../services/notification.service";
 
 const router = Router();
+
+// GET /users - List all users for discovery & follow dropdowns
+router.get("/", async (_req, res: Response) => {
+  try {
+    const users = await prisma.user.findMany({
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        username: true,
+        bio: true,
+        _count: {
+          select: {
+            Follow_Follow_followingIdToUser: true,
+            Follow_Follow_followerIdToUser: true,
+          },
+        },
+      },
+    });
+    res.json({
+      success: true,
+      data: users.map((u) => ({
+        id: u.id,
+        username: u.username,
+        bio: u.bio,
+        followers: u._count.Follow_Follow_followingIdToUser,
+        following: u._count.Follow_Follow_followerIdToUser,
+      })),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to fetch users" });
+  }
+});
 
 // GET /users/:id - View profile with counts and posts
 router.get("/:id", async (req, res: Response) => {
@@ -79,7 +111,7 @@ router.patch("/:id", authenticateJWT, async (req: AuthRequest, res: Response) =>
   }
 });
 
-// POST /users/:id/follow - Follow a user
+// POST /users/:id/follow - Send an Instagram-style Follow Request
 router.post("/:id/follow", authenticateJWT, async (req: AuthRequest, res: Response) => {
   try {
     const followerId = req.user!.id;
@@ -88,7 +120,10 @@ router.post("/:id/follow", authenticateJWT, async (req: AuthRequest, res: Respon
       return res.status(400).json({ success: false, error: "You cannot follow yourself" });
     }
 
-    const target = await prisma.user.findUnique({ where: { id: followingId } });
+    const [actor, target] = await Promise.all([
+      prisma.user.findUnique({ where: { id: followerId }, select: { username: true } }),
+      prisma.user.findUnique({ where: { id: followingId }, select: { id: true } }),
+    ]);
     if (!target) return res.status(404).json({ success: false, error: "Target user not found" });
 
     const existing = await prisma.follow.findUnique({
@@ -98,33 +133,97 @@ router.post("/:id/follow", authenticateJWT, async (req: AuthRequest, res: Respon
       return res.status(409).json({ success: false, error: "Already following this user" });
     }
 
-    const follow = await prisma.follow.create({
-      data: { followerId, followingId },
+    const pendingReq = await prisma.notification.findFirst({
+      where: {
+        type: "FOLLOW",
+        actorId: followerId,
+        recipientId: followingId,
+        message: { contains: "requested to follow you" },
+      },
+    });
+    if (pendingReq) {
+      return res.status(200).json({ success: true, status: "REQUESTED", message: "Follow request already sent" });
+    }
+
+    await createAndEmitNotification({
+      type: "FOLLOW",
+      actorId: followerId,
+      recipientId: followingId,
+      message: `${actor?.username || "Someone"} requested to follow you`,
     });
 
-    await notifyFollow(followerId, followingId);
-    res.status(201).json({ success: true, data: follow });
+    res.status(201).json({ success: true, status: "REQUESTED", message: "Follow request sent!" });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message || "Failed to follow user" });
+    res.status(500).json({ success: false, error: err.message || "Failed to send follow request" });
   }
 });
 
-// DELETE /users/:id/follow - Unfollow a user
+// POST /users/:id/follow/accept - Accept an incoming follow request from :id
+router.post("/:id/follow/accept", authenticateJWT, async (req: AuthRequest, res: Response) => {
+  try {
+    const recipientId = req.user!.id;
+    const followerId = String(req.params.id);
+
+    const [recipient, follower] = await Promise.all([
+      prisma.user.findUnique({ where: { id: recipientId }, select: { username: true } }),
+      prisma.user.findUnique({ where: { id: followerId }, select: { id: true, username: true } }),
+    ]);
+    if (!follower) return res.status(404).json({ success: false, error: "Requester not found" });
+
+    const follow = await prisma.follow.upsert({
+      where: { followerId_followingId: { followerId, followingId: recipientId } },
+      update: {},
+      create: { followerId, followingId: recipientId },
+    });
+
+    // Clear the pending request notification
+    await prisma.notification.deleteMany({
+      where: {
+        type: "FOLLOW",
+        actorId: followerId,
+        recipientId,
+        message: { contains: "requested to follow you" },
+      },
+    });
+
+    // Notify requester that their follow request was accepted
+    await createAndEmitNotification({
+      type: "FOLLOW",
+      actorId: recipientId,
+      recipientId: followerId,
+      message: `${recipient?.username || "User"} accepted your follow request`,
+    });
+
+    res.status(201).json({ success: true, message: `Accepted follow request from @${follower.username}`, data: follow });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to accept follow request" });
+  }
+});
+
+// DELETE /users/:id/follow - Unfollow a user or cancel follow request
 router.delete("/:id/follow", authenticateJWT, async (req: AuthRequest, res: Response) => {
   try {
     const followerId = req.user!.id;
     const followingId = String(req.params.id);
+
+    await prisma.notification.deleteMany({
+      where: {
+        type: "FOLLOW",
+        actorId: followerId,
+        recipientId: followingId,
+        message: { contains: "requested to follow you" },
+      },
+    });
+
     const existing = await prisma.follow.findUnique({
       where: { followerId_followingId: { followerId, followingId } },
     });
-    if (!existing) {
-      return res.status(404).json({ success: false, error: "Follow relationship not found" });
+    if (existing) {
+      await prisma.follow.delete({
+        where: { followerId_followingId: { followerId, followingId } },
+      });
     }
-
-    await prisma.follow.delete({
-      where: { followerId_followingId: { followerId, followingId } },
-    });
-    res.json({ success: true, message: "Unfollowed successfully" });
+    res.json({ success: true, message: "Unfollowed / cancelled request" });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message || "Failed to unfollow user" });
   }
