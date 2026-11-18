@@ -135,10 +135,14 @@
 
     async function clearNotifications() {
       if (!token) return;
-      await fetch(`${API}/notifications`, {
-        method: "DELETE",
+      const res = await fetch(`${API}/notifications/read-all`, {
+        method: "PATCH",
         headers: { Authorization: `Bearer ${token}` }
       });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        return alert(err.message || err.error || "Failed to clear notifications");
+      }
       loadNotifications();
     }
 
