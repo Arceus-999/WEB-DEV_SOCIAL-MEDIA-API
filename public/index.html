@@ -128,8 +128,7 @@
         document.getElementById("authCard").style.display = "none";
         document.getElementById("createCard").style.display = "block";
         document.getElementById("profileStats").style.display = "flex";
-        refreshSocialData();
-        loadNotifications();
+        refreshSocialData().then(() => loadNotifications());
       } else {
         document.getElementById("userBadge").textContent = "Not logged in";
         document.getElementById("authCard").style.display = "block";
@@ -266,13 +265,24 @@
           list.innerHTML = `<div style="color:#94a3b8;font-size:0.9rem;">No notifications yet.</div>`;
           return;
         }
+        const followingIds = new Set(myFollowing.map(x => x.id));
         list.innerHTML = notifications.map(n => {
           const isFollowReq = n.type === "FOLLOW" && (n.message || "").includes("requested to follow you") && n.actorId;
+          const alreadyFollowing = n.actorId && followingIds.has(n.actorId);
+          const isOtherActor = n.actorId && n.actorId !== currentUser.id;
+          let actionBtn = "";
+          if (isFollowReq) {
+            actionBtn = `<button class="accept-btn" onclick="acceptFollowRequest('${n.actorId}')">Accept</button>`;
+          } else if (isOtherActor && alreadyFollowing) {
+            actionBtn = `<span style="font-size:0.78rem;background:#334155;color:#38bdf8;padding:3px 9px;border-radius:6px;">Following ✓</span>`;
+          } else if (isOtherActor && !alreadyFollowing) {
+            actionBtn = `<button class="accept-btn" onclick="sendFollowRequest('${n.actorId}')">Follow Back</button>`;
+          }
           return `
             <div class="list-item">
               <span>${n.message || `${n.type} notification`}</span>
               <div class="row">
-                ${isFollowReq ? `<button class="accept-btn" onclick="acceptFollowRequest('${n.actorId}')">Accept</button>` : ""}
+                ${actionBtn}
                 <span style="font-size:0.75rem;color:#94a3b8;">${new Date(n.createdAt).toLocaleTimeString()}</span>
               </div>
             </div>
