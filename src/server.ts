@@ -1,5 +1,6 @@
 import express from "express";
 import http from "http";
+import path from "path";
 import cors from "cors";
 import dotenv from "dotenv";
 import { initSocketIO } from "./services/notification.service";
@@ -18,6 +19,8 @@ const httpServer = http.createServer(app);
 
 app.use(cors());
 app.use(express.json());
+app.use(express.static(path.join(process.cwd(), "public")));
+app.get("/", (_req, res) => res.sendFile(path.join(process.cwd(), "public", "index.html")));
 initSocketIO(httpServer);
 
 app.get("/health", (_req, res) => {
