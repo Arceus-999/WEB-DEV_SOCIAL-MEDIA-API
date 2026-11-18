@@ -15,7 +15,7 @@
     button { background: #0284c7; border: none; font-weight: 600; cursor: pointer; }
     button:hover { background: #0369a1; }
     button.secondary { background: #334155; width: auto; padding: 6px 12px; margin-top: 0; }
-    button.bell-btn { background: #334155; width: auto; padding: 6px 12px; margin-top: 0; position: relative; }
+    button.bell-btn { background: #334155; width: auto; padding: 6px 12px; margin-top: 0; }
     .badge { background: #ef4444; color: #fff; border-radius: 999px; padding: 2px 7px; font-size: 0.75rem; margin-left: 4px; }
     .row { display: flex; gap: 10px; align-items: center; }
     .post-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
@@ -30,6 +30,8 @@
     #notifPanel { display: none; border-color: #38bdf8; }
     .notif-item { padding: 8px 10px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; }
     .notif-item:last-child { border-bottom: none; }
+    .stats-bar { display: flex; justify-content: space-between; align-items: center; background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 12px 16px; margin-bottom: 18px; }
+    .stat-pill { background: #0f172a; padding: 6px 14px; border-radius: 8px; font-size: 0.9rem; border: 1px solid #334155; }
   </style>
 </head>
 <body>
@@ -40,6 +42,18 @@
 
   <div class="container">
     <div id="status">Loading posts from database...</div>
+
+    <!-- Profile Follower / Following Stats Bar -->
+    <div class="stats-bar" id="profileStats" style="display:none;">
+      <div>
+        <strong id="statUsername" style="color:#38bdf8;">@user</strong>
+        <div id="statBio" style="font-size:0.8rem;color:#94a3b8;margin-top:2px;"></div>
+      </div>
+      <div class="row">
+        <div class="stat-pill"><strong id="followerCount">0</strong> Followers</div>
+        <div class="stat-pill"><strong id="followingCount">0</strong> Following</div>
+      </div>
+    </div>
 
     <!-- Notifications Panel -->
     <div class="card" id="notifPanel">
@@ -52,9 +66,9 @@
 
     <!-- Auth Box -->
     <div class="card" id="authCard">
-      <strong>Login or Register to Post, Like & Comment</strong>
+      <strong>Login or Register to Post, Like, Follow & Comment</strong>
       <div class="row">
-        <input id="email" placeholder="Email (e.g. satya@example.com)" />
+        <input id="email" placeholder="Email (e.g. ananya@example.com)" />
         <input id="password" type="password" placeholder="Password" />
       </div>
       <div class="row">
@@ -66,9 +80,12 @@
 
     <!-- Create Post Box -->
     <div class="card" id="createCard" style="display:none;">
-      <strong>Create a New Post</strong>
+      <div class="post-header" style="margin-bottom:4px;">
+        <strong>Create a New Post</strong>
+        <button class="secondary" style="font-size:0.75rem;padding:4px 8px;" onclick="fillSampleImage()">Use Working Sample Image</button>
+      </div>
       <textarea id="caption" rows="2" placeholder="Write a caption with #hashtags..."></textarea>
-      <input id="mediaURL" placeholder="Image URL (e.g. https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=900)" />
+      <input id="mediaURL" placeholder="Direct Image URL ending in .jpg/.png or Unsplash URL" />
       <button onclick="createPost()">Publish Post</button>
     </div>
 
@@ -79,7 +96,10 @@
     const API = window.location.origin;
     let token = localStorage.getItem("token") || "";
     let currentUser = JSON.parse(localStorage.getItem("user") || "null");
-    let notifications = [];
+
+    function fillSampleImage() {
+      document.getElementById("mediaURL").value = "https://images.unsplash.com/photo-1518770660439-4636190af475?w=900";
+    }
 
     function updateAuthUI() {
       if (token && currentUser) {
@@ -90,12 +110,32 @@
         `;
         document.getElementById("authCard").style.display = "none";
         document.getElementById("createCard").style.display = "block";
+        document.getElementById("profileStats").style.display = "flex";
+        loadProfileStats();
         loadNotifications();
       } else {
         document.getElementById("userBadge").textContent = "Not logged in";
         document.getElementById("authCard").style.display = "block";
         document.getElementById("createCard").style.display = "none";
+        document.getElementById("profileStats").style.display = "none";
         document.getElementById("notifPanel").style.display = "none";
+      }
+    }
+
+    async function loadProfileStats() {
+      if (!currentUser?.id) return;
+      try {
+        const res = await fetch(`${API}/users/${currentUser.id}`);
+        const json = await res.json();
+        const u = json.data || json;
+        document.getElementById("statUsername").textContent = `@${u.username || currentUser.username}`;
+        document.getElementById("statBio").textContent = u.bio || "Active member";
+        const followers = u.followerCount ?? u._count?.followers ?? (Array.isArray(u.followers) ? u.followers.length : 0);
+        const following = u.followingCount ?? u._count?.following ?? (Array.isArray(u.following) ? u.following.length : 0);
+        document.getElementById("followerCount").textContent = String(followers);
+        document.getElementById("followingCount").textContent = String(following);
+      } catch (e) {
+        console.error(e);
       }
     }
 
@@ -112,12 +152,17 @@
           headers: { Authorization: `Bearer ${token}` }
         });
         const json = await res.json();
-        notifications = json.data?.items || json.data?.notifications || [];
-        if (notifications.length > 0) document.getElementById("notifPanel").style.display = "block";
-        const badge = document.getElementById("notifCount");
-        if (badge) badge.textContent = notifications.length;
-
         const list = document.getElementById("notifList");
+        const badge = document.getElementById("notifCount");
+        if (!res.ok) {
+          if (badge) badge.textContent = "!";
+          list.innerHTML = `<div style="color:#f87171;">Error ${res.status}: ${json.message || json.error}</div>`;
+          document.getElementById("notifPanel").style.display = "block";
+          return;
+        }
+        const notifications = Array.isArray(json.data?.items) ? json.data.items : (Array.isArray(json.data) ? json.data : []);
+        if (badge) badge.textContent = String(notifications.length);
+        if (notifications.length > 0) document.getElementById("notifPanel").style.display = "block";
         if (!notifications.length) {
           list.innerHTML = `<div style="color:#94a3b8;font-size:0.9rem;">No notifications yet.</div>`;
           return;
@@ -143,7 +188,7 @@
         const err = await res.json().catch(() => ({}));
         return alert(err.message || err.error || "Failed to clear notifications");
       }
-      loadNotifications();
+      await loadNotifications();
     }
 
     async function login() {
@@ -228,7 +273,7 @@
         method: "POST",
         headers: { Authorization: `Bearer ${token}` }
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.status === 409) {
         await fetch(`${API}/users/${userId}/follow`, {
           method: "DELETE",
@@ -240,6 +285,7 @@
       } else {
         alert(data.error || data.message || "Action failed");
       }
+      loadProfileStats();
     }
 
     async function addComment(postId) {
@@ -285,7 +331,7 @@
             </div>
             <div>${p.caption}</div>
             <div>${(p.hashtags || []).map(t => `<span class="tag">${t}</span>`).join("")}</div>
-            ${p.mediaURL ? `<img class="post-img" src="${p.mediaURL}" alt="post media" />` : ""}
+            ${p.mediaURL ? `<img class="post-img" src="${p.mediaURL}" alt="post media" onerror="this.style.display='none'" />` : ""}
             <div class="actions">
               <button onclick="likePost('${p.id}')">❤️ Like (${p.likeCount ?? 0})</button>
             </div>
