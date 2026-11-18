@@ -112,7 +112,8 @@
           headers: { Authorization: `Bearer ${token}` }
         });
         const json = await res.json();
-        notifications = json.data?.notifications || json.data || [];
+        notifications = json.data?.items || json.data?.notifications || [];
+        if (notifications.length > 0) document.getElementById("notifPanel").style.display = "block";
         const badge = document.getElementById("notifCount");
         if (badge) badge.textContent = notifications.length;
 
